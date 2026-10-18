@@ -1496,7 +1496,7 @@ export default function App() {
             Copyright © {new Date().getFullYear()} <strong>Abhay Mandal</strong>. All Rights Reserved.
           </p>
           <p className="footer-subtext">
-            Songs Portal System • Built with ❤️ by Abhay Mandal
+            Songs Portal System • Developed by Abhay Mandal
           </p>
         </div>
       </footer>
