@@ -580,7 +580,7 @@ export default function App() {
       {/* NAVBAR */}
       <header className="navbar">
         <div className="nav-brand" onClick={() => setActiveTab("all")}>
-          🎵 <span>SongsPortal</span>
+          🎵 <span>Songs Portal System</span>
         </div>
 
         <nav className="nav-menu">
