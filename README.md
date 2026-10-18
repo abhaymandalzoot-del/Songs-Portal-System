@@ -1,6 +1,6 @@
 # 🎵 Songs Portal System (Full Stack)
 
-A complete Audio & Video Portal built with **React (Vite)**, **Node.js (Express)**, and **Microsoft SQL Server**.
+A complete Audio & Video Portal built with **React (Vite)**, **Node.js (Express)**, and **Microsoft SQL Server**. By Abhay
 
 ---
 
@@ -18,7 +18,7 @@ Songs Portal System/
 │   │   ├── server.js        👉 Streaming & CRUD REST API
 │   │   └── db.js            👉 MS SQL Server Connection
 │   ├── uploads/             👉 Uploaded Audio (.mp3) & Video (.mp4) Files
-│   └── .env                 👉 Database Config (DB: SongsPortalSystem)
+│                  👉 Database Config (DB: SongsPortalSystem)
 ├── database.sql             👉 Complete SQL Server Schema
 ├── check_users.bat          👉 Double-click to see registered users in database
 ├── package.json             👉 Project scripts
