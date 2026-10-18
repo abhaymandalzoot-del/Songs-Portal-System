@@ -739,6 +739,91 @@ app.get("/api/songs/:id/download", async (req, res, next) => {
 });
 
 // -------------------------------------------------------------
+// 1. FEEDBACK API ROUTES
+// -------------------------------------------------------------
+app.post("/api/feedback", async (req, res, next) => {
+  try {
+    const { user_id, username, rating, category, comment } = req.body;
+    if (!comment || !String(comment).trim()) {
+      return res.status(400).json({ message: "Comments are required." });
+    }
+
+    const pool = await getPool();
+    await pool.request()
+      .input("userId", sql.Int, user_id ? Number(user_id) : null)
+      .input("username", sql.NVarChar(100), username || "Anonymous Listener")
+      .input("rating", sql.Int, Number(rating) || 5)
+      .input("category", sql.NVarChar(100), category || "General Experience")
+      .input("comment", sql.NVarChar(sql.MAX), String(comment).trim())
+      .query(`
+        INSERT INTO dbo.Feedback (user_id, username, rating, category, comment)
+        VALUES (@userId, @username, @rating, @category, @comment)
+      `);
+
+    res.status(201).json({ message: "Thank you! Your feedback has been submitted successfully." });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/feedback", async (_req, res, next) => {
+  try {
+    const pool = await getPool();
+    const result = await pool.request().query(`
+      SELECT feedback_id, user_id, username, rating, category, comment, created_at
+      FROM dbo.Feedback
+      ORDER BY feedback_id DESC
+    `);
+    res.json(result.recordset);
+  } catch (error) { next(error); }
+});
+
+// -------------------------------------------------------------
+// 2. PAYMENT / SUBSCRIPTION API ROUTES
+// -------------------------------------------------------------
+app.post("/api/payment/process", async (req, res, next) => {
+  try {
+    const { user_id, username, plan_id, plan_name, amount, currency, status } = req.body;
+    if (!user_id || !amount || !plan_name) {
+      return res.status(400).json({ message: "Missing payment details or user session." });
+    }
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("userId", sql.Int, Number(user_id))
+      .input("username", sql.NVarChar(100), username || "User")
+      .input("planId", sql.NVarChar(50), plan_id || "monthly")
+      .input("planName", sql.NVarChar(100), plan_name)
+      .input("amount", sql.Decimal(10, 2), Number(amount))
+      .input("currency", sql.NVarChar(10), currency || "INR")
+      .input("status", sql.NVarChar(50), status || "SUCCESS")
+      .query(`
+        INSERT INTO dbo.Payments (user_id, username, plan_id, plan_name, amount, currency, status)
+        OUTPUT INSERTED.payment_id
+        VALUES (@userId, @username, @planId, @planName, @amount, @currency, @status)
+      `);
+
+    const transactionId = result.recordset[0].payment_id;
+    console.log(`[PAYMENT SUCCESS] User #${user_id} (${username}) purchased ${plan_name} for ₹${amount}`);
+
+    res.status(201).json({
+      message: "Payment processed and recorded successfully!",
+      transaction_id: transactionId
+    });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/payments", async (_req, res, next) => {
+  try {
+    const pool = await getPool();
+    const result = await pool.request().query(`
+      SELECT payment_id, user_id, username, plan_id, plan_name, amount, currency, status, created_at
+      FROM dbo.Payments
+      ORDER BY payment_id DESC
+    `);
+    res.json(result.recordset);
+  } catch (error) { next(error); }
+});
+
+// -------------------------------------------------------------
 // ERROR HANDLER & START
 // -------------------------------------------------------------
 app.use((error, _req, res, _next) => {

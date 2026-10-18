@@ -95,6 +95,10 @@ export default function App() {
   });
   const [usersList, setUsersList] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [feedbackList, setFeedbackList] = useState([]);
+  const [loadingFeedback, setLoadingFeedback] = useState(false);
+  const [paymentList, setPaymentList] = useState([]);
+  const [loadingPayments, setLoadingPayments] = useState(false);
 
   const loadUsers = async () => {
     setLoadingUsers(true);
@@ -108,6 +112,36 @@ export default function App() {
       console.error("Failed to load users:", e);
     } finally {
       setLoadingUsers(false);
+    }
+  };
+
+  const loadFeedback = async () => {
+    setLoadingFeedback(true);
+    try {
+      const res = await fetch(`${API_BASE}/feedback`);
+      if (res.ok) {
+        const data = await res.json();
+        setFeedbackList(data);
+      }
+    } catch (e) {
+      console.error("Failed to load feedback:", e);
+    } finally {
+      setLoadingFeedback(false);
+    }
+  };
+
+  const loadPayments = async () => {
+    setLoadingPayments(true);
+    try {
+      const res = await fetch(`${API_BASE}/payments`);
+      if (res.ok) {
+        const data = await res.json();
+        setPaymentList(data);
+      }
+    } catch (e) {
+      console.error("Failed to load payments:", e);
+    } finally {
+      setLoadingPayments(false);
     }
   };
 
@@ -153,6 +187,8 @@ export default function App() {
     loadSongs();
     if (activeTab === "admin" && user?.role === "admin") {
       loadUsers();
+      loadFeedback();
+      loadPayments();
     }
   }, [user, activeTab, selectedCategory]);
 
@@ -580,7 +616,7 @@ export default function App() {
       {/* NAVBAR */}
       <header className="navbar">
         <div className="nav-brand" onClick={() => setActiveTab("all")}>
-          🎵 <span>Songs Portal System</span>
+          🎵 <span>SongsPortal</span>
         </div>
 
         <nav className="nav-menu">
@@ -601,6 +637,18 @@ export default function App() {
             onClick={() => setActiveTab("video")}
           >
             🎬 Video Songs
+          </button>
+          <button
+            className={`nav-btn ${activeTab === "premium" ? "active" : ""}`}
+            onClick={() => setActiveTab("premium")}
+          >
+            💎 Premium
+          </button>
+          <button
+            className={`nav-btn ${activeTab === "feedback" ? "active" : ""}`}
+            onClick={() => setActiveTab("feedback")}
+          >
+            💬 Feedback
           </button>
           {user && (
             <button
@@ -942,7 +990,97 @@ export default function App() {
               </table>
             </div>
           </div>
+
+          <div className="admin-card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "18px" }}>
+              <h2 style={{ margin: 0 }}>💬 Listener Feedback Submissions ({feedbackList.length})</h2>
+              <button className="btn-secondary" onClick={loadFeedback} disabled={loadingFeedback} style={{ fontSize: "12px", padding: "6px 12px" }}>
+                {loadingFeedback ? "Refreshing..." : "🔄 Refresh Feedback"}
+              </button>
+            </div>
+            {feedbackList.length === 0 ? (
+              <p style={{ color: "var(--text-muted)", fontSize: "13px" }}>No feedback submitted yet.</p>
+            ) : (
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>User</th>
+                      <th>Category</th>
+                      <th>Rating</th>
+                      <th>Comment</th>
+                      <th>Submitted At</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {feedbackList.map((f) => (
+                      <tr key={f.feedback_id}>
+                        <td>#{f.feedback_id}</td>
+                        <td><strong>{f.username || "Anonymous"}</strong></td>
+                        <td><span className="small-tag">{f.category}</span></td>
+                        <td style={{ color: "#f59e0b" }}>{"⭐".repeat(f.rating || 5)}</td>
+                        <td style={{ maxWidth: "350px", wordBreak: "break-word" }}>{f.comment}</td>
+                        <td style={{ color: "var(--text-muted)", fontSize: "12px" }}>
+                          {f.created_at ? new Date(f.created_at).toLocaleString() : "N/A"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="admin-card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "18px" }}>
+              <h2 style={{ margin: 0 }}>💳 Payment & Subscription Records ({paymentList.length})</h2>
+              <button className="btn-secondary" onClick={loadPayments} disabled={loadingPayments} style={{ fontSize: "12px", padding: "6px 12px" }}>
+                {loadingPayments ? "Refreshing..." : "🔄 Refresh Payments"}
+              </button>
+            </div>
+            {paymentList.length === 0 ? (
+              <p style={{ color: "var(--text-muted)", fontSize: "13px" }}>No payment records yet.</p>
+            ) : (
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Txn ID</th>
+                      <th>User</th>
+                      <th>Plan</th>
+                      <th>Amount</th>
+                      <th>Status</th>
+                      <th>Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paymentList.map((p) => (
+                      <tr key={p.payment_id}>
+                        <td>#{p.payment_id}</td>
+                        <td><strong>{p.username || "User"}</strong></td>
+                        <td><span className="small-tag">{p.plan_name}</span></td>
+                        <td style={{ color: "#10b981", fontWeight: "700" }}>₹{p.amount} {p.currency}</td>
+                        <td>
+                          <span style={{ background: "#065f46", color: "#a7f3d0", padding: "2px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: "700" }}>
+                            {p.status}
+                          </span>
+                        </td>
+                        <td style={{ color: "var(--text-muted)", fontSize: "12px" }}>
+                          {p.created_at ? new Date(p.created_at).toLocaleString() : "N/A"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
+      ) : activeTab === "feedback" ? (
+        <FeedbackPage user={user} API_BASE={API_BASE} />
+      ) : activeTab === "premium" ? (
+        <PaymentPage user={user} API_BASE={API_BASE} />
       ) : (
         /* MAIN LISTENER PORTAL VIEW */
         <main>
@@ -1818,6 +1956,238 @@ export default function App() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ==========================================
+// FEEDBACK PAGE COMPONENT
+// ==========================================
+function FeedbackPage({ user, API_BASE }) {
+  const [rating, setRating] = useState("5");
+  const [category, setCategory] = useState("General Experience");
+  const [comment, setComment] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState("");
+  const [isError, setIsError] = useState(false);
+
+  const handleSubmitFeedback = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setMessage("");
+    setIsError(false);
+
+    try {
+      const res = await fetch(`${API_BASE}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: user ? user.user_id : null,
+          username: user ? user.username : "Anonymous Listener",
+          rating: Number(rating),
+          category,
+          comment
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to submit feedback.");
+
+      setMessage(data.message || "Thank you for your valuable feedback!");
+      setComment("");
+    } catch (err) {
+      setIsError(true);
+      setMessage(err.message || "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ padding: "0 36px 40px", maxWidth: "800px", margin: "0 auto" }}>
+      <div className="hero" style={{ paddingLeft: 0, paddingRight: 0 }}>
+        <h1>Listener Feedback & Suggestions 💬</h1>
+        <p>Help us improve your music & video streaming experience. We read every response!</p>
+      </div>
+
+      <div className="admin-card">
+        {message && (
+          <div style={{ padding: "12px 18px", borderRadius: "8px", marginBottom: "20px", background: isError ? "#991b1b" : "#065f46", color: isError ? "#fecaca" : "#a7f3d0", fontWeight: "600", fontSize: "14px" }}>
+            {isError ? "⚠️ " : "✓ "} {message}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmitFeedback}>
+          <div className="admin-form-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", marginBottom: "16px" }}>
+            <div className="form-group">
+              <label>Feedback Category</label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+              >
+                <option value="General Experience">General Experience</option>
+                <option value="Audio Player">Audio Player & Quality</option>
+                <option value="Video Streaming">Video Streaming</option>
+                <option value="UI & Design">UI & Design</option>
+                <option value="Bug Report">Bug / Technical Issue</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Overall Rating</label>
+              <select
+                value={rating}
+                onChange={(e) => setRating(e.target.value)}
+              >
+                <option value="5">⭐⭐⭐⭐⭐ (5 - Excellent)</option>
+                <option value="4">⭐⭐⭐⭐ (4 - Very Good)</option>
+                <option value="3">⭐⭐⭐ (3 - Good)</option>
+                <option value="2">⭐⭐ (2 - Fair)</option>
+                <option value="1">⭐ (1 - Poor)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: "20px" }}>
+            <label>Your Comments / Suggestions *</label>
+            <textarea
+              rows="5"
+              required
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="Tell us what you love or what we can improve..."
+              style={{ background: "#0f172a", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px", color: "#fff", fontSize: "14px", outline: "none", resize: "vertical", fontFamily: "inherit" }}
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="btn-primary"
+            disabled={submitting}
+            style={{ width: "100%", padding: "12px", fontSize: "15px" }}
+          >
+            {submitting ? "Submitting to Server..." : "🚀 Submit Feedback"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// PAYMENT PAGE COMPONENT
+// ==========================================
+function PaymentPage({ user, API_BASE }) {
+  const [selectedPlan, setSelectedPlan] = useState({ id: "monthly", name: "Premium Monthly Pass", price: 199, duration: "30 Days" });
+  const [processing, setProcessing] = useState(false);
+  const [paymentResult, setPaymentResult] = useState("");
+  const [isError, setIsError] = useState(false);
+
+  const plans = [
+    { id: "weekly", name: "Weekly Supporter", price: 69, duration: "7 Days Access", desc: "Ad-free streaming & downloads for 1 week." },
+    { id: "monthly", name: "Premium Monthly Pass", price: 199, duration: "30 Days Access", desc: "Full HD videos, lossless audio & priority queue." },
+    { id: "yearly", name: "VIP Annual Access", price: 1499, duration: "365 Days Access", desc: "Ultimate all-inclusive VIP badge & permanent perks." }
+  ];
+
+  const handleProcessPayment = async () => {
+    if (!user) {
+      alert("Please login first to proceed with payment!");
+      return;
+    }
+
+    if (!window.confirm(`Confirm payment of ₹${selectedPlan.price} for ${selectedPlan.name}?`)) {
+      return;
+    }
+
+    setProcessing(true);
+    setPaymentResult("");
+    setIsError(false);
+
+    try {
+      const res = await fetch(`${API_BASE}/payment/process`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: user.user_id,
+          username: user.username,
+          plan_id: selectedPlan.id,
+          plan_name: selectedPlan.name,
+          amount: selectedPlan.price,
+          currency: "INR",
+          status: "SUCCESS"
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Payment transaction failed.");
+
+      setPaymentResult(`🎉 Payment Successful! Transaction ID: #${data.transaction_id || Math.floor(100000 + Math.random() * 900000)} (${selectedPlan.name} activated)`);
+    } catch (err) {
+      setIsError(true);
+      setPaymentResult(err.message || "Could not complete the payment transaction.");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  return (
+    <div style={{ padding: "0 36px 40px", maxWidth: "900px", margin: "0 auto" }}>
+      <div className="hero" style={{ paddingLeft: 0, paddingRight: 0 }}>
+        <h1>Upgrade to Premium 💎</h1>
+        <p>Unlock high-definition video streaming, offline background audio, and exclusive music catalogs.</p>
+      </div>
+
+      {paymentResult && (
+        <div style={{ padding: "14px 20px", borderRadius: "10px", marginBottom: "24px", background: isError ? "#991b1b" : "#065f46", color: isError ? "#fecaca" : "#a7f3d0", fontWeight: "600", fontSize: "15px" }}>
+          {paymentResult}
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "20px", marginBottom: "30px" }}>
+        {plans.map((p) => (
+          <div
+            key={p.id}
+            onClick={() => setSelectedPlan(p)}
+            style={{
+              background: selectedPlan.id === p.id ? "rgba(99, 102, 241, 0.12)" : "var(--bg-card)",
+              border: selectedPlan.id === p.id ? "2px solid var(--primary)" : "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              padding: "24px",
+              cursor: "pointer",
+              transition: "all 0.2s ease",
+              display: "flex",
+              flexDirection: "column",
+              position: "relative"
+            }}
+          >
+            {selectedPlan.id === p.id && (
+              <span style={{ position: "absolute", top: "14px", right: "14px", background: "var(--primary)", color: "#fff", fontSize: "11px", fontWeight: "700", padding: "3px 8px", borderRadius: "4px" }}>
+                SELECTED
+              </span>
+            )}
+            <h3 style={{ margin: "0 0 8px", fontSize: "18px", color: "#fff" }}>{p.name}</h3>
+            <div style={{ fontSize: "28px", fontWeight: "800", color: "#818cf8", marginBottom: "12px" }}>
+              ₹{p.price} <span style={{ fontSize: "13px", fontWeight: "500", color: "var(--text-muted)" }}>/ {p.duration}</span>
+            </div>
+            <p style={{ color: "var(--text-muted)", fontSize: "13px", margin: "0 0 20px", flex: 1 }}>{p.desc}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="admin-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "16px" }}>
+        <div>
+          <h3 style={{ margin: "0 0 4px", fontSize: "16px", color: "#fff" }}>Selected Plan: {selectedPlan.name}</h3>
+          <p style={{ margin: 0, fontSize: "13px", color: "var(--text-muted)" }}>Total Payable Amount: <strong style={{ color: "#10b981" }}>₹{selectedPlan.price}</strong> ({selectedPlan.duration})</p>
+        </div>
+        <button
+          onClick={handleProcessPayment}
+          disabled={processing}
+          className="btn-primary"
+          style={{ padding: "12px 28px", fontSize: "15px", background: "#10b981" }}
+        >
+          {processing ? "Processing Secure Payment..." : `Pay ₹${selectedPlan.price} Now`}
+        </button>
+      </div>
     </div>
   );
 }
