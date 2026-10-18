@@ -328,7 +328,7 @@ app.post("/api/auth/login", async (req, res, next) => {
     const userCheck = await pool.request()
       .input("identifier", sql.NVarChar(150), cleanUser)
       .query(`
-        SELECT user_id, username, email, password, role
+        SELECT user_id, username, email, password, role, ISNULL(is_vip, 0) AS is_vip
         FROM dbo.Users
         WHERE username = @identifier OR email = @identifier
       `);
@@ -346,13 +346,16 @@ app.post("/api/auth/login", async (req, res, next) => {
       });
     }
 
+    const isVipStatus = user.role === "admin" ? 1 : (user.is_vip ? 1 : 0);
+
     res.json({
       message: "Login successful!",
       user: {
         user_id: user.user_id,
         username: user.username,
         email: user.email,
-        role: user.role
+        role: user.role,
+        is_vip: isVipStatus
       }
     });
   } catch (error) { next(error); }
@@ -362,11 +365,54 @@ app.get("/api/users", async (_req, res, next) => {
   try {
     const pool = await getPool();
     const result = await pool.request().query(`
-      SELECT user_id, username, email, role, created_at
+      SELECT user_id, username, email, role, ISNULL(is_vip, 0) AS is_vip, created_at
       FROM dbo.Users
       ORDER BY user_id DESC
     `);
     res.json(result.recordset);
+  } catch (error) { next(error); }
+});
+
+// Admin Update/Cancel User Subscription (Convert VIP user back to normal free user)
+app.put("/api/users/:id/subscription", async (req, res, next) => {
+  try {
+    const userId = Number(req.params.id);
+    const { is_vip } = req.body;
+    const pool = await getPool();
+
+    // Verify user exists
+    const check = await pool.request()
+      .input("userId", sql.Int, userId)
+      .query("SELECT user_id, username, role, ISNULL(is_vip, 0) AS is_vip FROM dbo.Users WHERE user_id = @userId");
+
+    if (check.recordset.length === 0) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    const targetUser = check.recordset[0];
+    const newVip = Boolean(is_vip) ? 1 : 0;
+
+    await pool.request()
+      .input("userId", sql.Int, userId)
+      .input("isVip", sql.Bit, newVip)
+      .query("UPDATE dbo.Users SET is_vip = @isVip WHERE user_id = @userId");
+
+    // If cancelling VIP, update active payment status in database as well
+    if (!newVip) {
+      await pool.request()
+        .input("userId", sql.Int, userId)
+        .query("UPDATE dbo.Payments SET status = 'CANCELLED_BY_ADMIN' WHERE user_id = @userId AND status = 'SUCCESS'");
+    }
+
+    console.log(`[ADMIN ACTION] User #${userId} (${targetUser.username}) subscription status changed to is_vip=${newVip}`);
+
+    res.json({
+      message: newVip
+        ? `VIP subscription activated for ${targetUser.username}.`
+        : `Subscription cancelled for ${targetUser.username}. User converted back to normal free user.`,
+      user_id: userId,
+      is_vip: newVip
+    });
   } catch (error) { next(error); }
 });
 
@@ -428,7 +474,8 @@ app.get("/api/songs", async (req, res, next) => {
       SELECT s.song_id, s.song_name, s.singer_name, s.movie_name, s.album_name,
              s.[language], s.category, s.year_of_Publishing, s.ratting, s.type_of_song,
              s.song_file, s.image_file, s.media_type, s.created_at,
-             CASE WHEN f.favorite_id IS NOT NULL THEN 1 ELSE 0 END AS is_favorite
+             CASE WHEN f.favorite_id IS NOT NULL THEN 1 ELSE 0 END AS is_favorite,
+             (SELECT COUNT(*) FROM dbo.Feedback fb WHERE fb.song_id = s.song_id) AS feedback_count
       FROM dbo.Songs s
       LEFT JOIN dbo.Favorites f ON f.song_id = s.song_id
     `;
@@ -739,38 +786,80 @@ app.get("/api/songs/:id/download", async (req, res, next) => {
 });
 
 // -------------------------------------------------------------
-// 1. FEEDBACK API ROUTES
+// 1. SONG-LEVEL FEEDBACK & REVIEWS API
 // -------------------------------------------------------------
-app.post("/api/feedback", async (req, res, next) => {
+// Get all feedback for a specific song (visible to User X, User Y, Admin, Guests)
+app.get("/api/songs/:id/feedback", async (req, res, next) => {
   try {
+    const songId = Number(req.params.id);
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("songId", sql.Int, songId)
+      .query(`
+        SELECT f.feedback_id, f.song_id, f.user_id, f.username, f.rating, f.category, f.comment, f.created_at,
+               ISNULL(u.is_vip, 0) AS is_vip,
+               u.role AS user_role
+        FROM dbo.Feedback f
+        LEFT JOIN dbo.Users u ON u.user_id = f.user_id
+        WHERE f.song_id = @songId
+        ORDER BY f.feedback_id DESC
+      `);
+    res.json(result.recordset);
+  } catch (error) { next(error); }
+});
+
+// Post review / feedback for a specific song
+app.post("/api/songs/:id/feedback", async (req, res, next) => {
+  try {
+    const songId = Number(req.params.id);
     const { user_id, username, rating, category, comment } = req.body;
     if (!comment || !String(comment).trim()) {
-      return res.status(400).json({ message: "Comments are required." });
+      return res.status(400).json({ message: "Review / Feedback comment is required." });
     }
 
     const pool = await getPool();
     await pool.request()
+      .input("songId", sql.Int, songId)
       .input("userId", sql.Int, user_id ? Number(user_id) : null)
       .input("username", sql.NVarChar(100), username || "Anonymous Listener")
       .input("rating", sql.Int, Number(rating) || 5)
-      .input("category", sql.NVarChar(100), category || "General Experience")
+      .input("category", sql.NVarChar(100), category || "General")
       .input("comment", sql.NVarChar(sql.MAX), String(comment).trim())
       .query(`
-        INSERT INTO dbo.Feedback (user_id, username, rating, category, comment)
-        VALUES (@userId, @username, @rating, @category, @comment)
+        INSERT INTO dbo.Feedback (song_id, user_id, username, rating, category, comment)
+        VALUES (@songId, @userId, @username, @rating, @category, @comment)
       `);
 
-    res.status(201).json({ message: "Thank you! Your feedback has been submitted successfully." });
+    res.status(201).json({ message: "Review submitted successfully!" });
   } catch (error) { next(error); }
 });
 
+// Delete feedback (Admin power)
+app.delete("/api/feedback/:id", async (req, res, next) => {
+  try {
+    const feedbackId = Number(req.params.id);
+    const pool = await getPool();
+    await pool.request()
+      .input("feedbackId", sql.Int, feedbackId)
+      .query("DELETE FROM dbo.Feedback WHERE feedback_id = @feedbackId");
+
+    res.json({ message: "Feedback deleted successfully.", feedback_id: feedbackId });
+  } catch (error) { next(error); }
+});
+
+// Get all feedback across all songs (for Admin Portal)
 app.get("/api/feedback", async (_req, res, next) => {
   try {
     const pool = await getPool();
     const result = await pool.request().query(`
-      SELECT feedback_id, user_id, username, rating, category, comment, created_at
-      FROM dbo.Feedback
-      ORDER BY feedback_id DESC
+      SELECT f.feedback_id, f.song_id, f.user_id, f.username, f.rating, f.category, f.comment, f.created_at,
+             s.song_name, s.singer_name,
+             ISNULL(u.is_vip, 0) AS is_vip,
+             u.role AS user_role
+      FROM dbo.Feedback f
+      LEFT JOIN dbo.Songs s ON s.song_id = f.song_id
+      LEFT JOIN dbo.Users u ON u.user_id = f.user_id
+      ORDER BY f.feedback_id DESC
     `);
     res.json(result.recordset);
   } catch (error) { next(error); }
@@ -802,11 +891,18 @@ app.post("/api/payment/process", async (req, res, next) => {
       `);
 
     const transactionId = result.recordset[0].payment_id;
-    console.log(`[PAYMENT SUCCESS] User #${user_id} (${username}) purchased ${plan_name} for ₹${amount}`);
+
+    // Automatically elevate user to VIP member in database upon payment!
+    await pool.request()
+      .input("userId", sql.Int, Number(user_id))
+      .query("UPDATE dbo.Users SET is_vip = 1 WHERE user_id = @userId");
+
+    console.log(`[PAYMENT SUCCESS] User #${user_id} (${username}) purchased ${plan_name} for ₹${amount} - VIP status activated!`);
 
     res.status(201).json({
-      message: "Payment processed and recorded successfully!",
-      transaction_id: transactionId
+      message: "Subscription activated successfully!",
+      transaction_id: transactionId,
+      is_vip: 1
     });
   } catch (error) { next(error); }
 });

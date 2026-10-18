@@ -62,6 +62,28 @@ export default function App() {
   // Video modal state
   const [activeVideoTrack, setActiveVideoTrack] = useState(null);
 
+  // VIP download lock modal state & helpers
+  const [vipModalOpen, setVipModalOpen] = useState(false);
+  const isVipUser = Boolean(user && (user.is_vip || user.role === "admin"));
+
+  const handleDownloadClick = (e, _item) => {
+    if (!isVipUser) {
+      e.preventDefault();
+      setVipModalOpen(true);
+      return;
+    }
+  };
+
+  const handleSubscriptionSuccess = (planName) => {
+    if (user) {
+      const updated = { ...user, is_vip: 1, vip_plan: planName };
+      setUser(updated);
+      localStorage.setItem("songportal_user", JSON.stringify(updated));
+      setSuccessMessage(`👑 Congratulations! You are now an active VIP Member (${planName}). All downloads & VIP perks unlocked!`);
+      setTimeout(() => setSuccessMessage(""), 5000);
+    }
+  };
+
   // Admin upload form
   const [adminForm, setAdminForm] = useState({
     song_name: "",
@@ -142,6 +164,93 @@ export default function App() {
       console.error("Failed to load payments:", e);
     } finally {
       setLoadingPayments(false);
+    }
+  };
+
+  // Song-level feedback modal state
+  const [feedbackSong, setFeedbackSong] = useState(null);
+  const [songFeedbackList, setSongFeedbackList] = useState([]);
+  const [loadingSongFeedback, setLoadingSongFeedback] = useState(false);
+  const [feedbackForm, setFeedbackForm] = useState({ rating: "5", category: "General", comment: "" });
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [feedbackError, setFeedbackError] = useState(false);
+
+  const openSongFeedback = async (song) => {
+    setFeedbackSong(song);
+    setFeedbackMessage("");
+    setFeedbackError(false);
+    setFeedbackForm({ rating: "5", category: "General", comment: "" });
+    loadSongFeedback(song.song_id);
+  };
+
+  const loadSongFeedback = async (songId) => {
+    setLoadingSongFeedback(true);
+    try {
+      const res = await fetch(`${API_BASE}/songs/${songId}/feedback`);
+      if (res.ok) {
+        setSongFeedbackList(await res.json());
+      }
+    } catch (e) {
+      console.error("Failed to load song feedback:", e);
+    } finally {
+      setLoadingSongFeedback(false);
+    }
+  };
+
+  const handleSubmitSongFeedback = async (e) => {
+    e.preventDefault();
+    if (!feedbackSong) return;
+    if (!user) {
+      openAuthModal("login");
+      return;
+    }
+    setSubmittingFeedback(true);
+    setFeedbackMessage("");
+    setFeedbackError(false);
+    try {
+      const res = await fetch(`${API_BASE}/songs/${feedbackSong.song_id}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: user.user_id,
+          username: user.username,
+          rating: Number(feedbackForm.rating),
+          category: feedbackForm.category,
+          comment: feedbackForm.comment
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to submit feedback.");
+      setFeedbackMessage(data.message || "Review submitted successfully!");
+      setFeedbackForm({ rating: "5", category: "General", comment: "" });
+      loadSongFeedback(feedbackSong.song_id);
+      setActiveAudioTrack((prev) => (prev && prev.song_id === feedbackSong.song_id ? { ...prev, feedback_count: (prev.feedback_count || 0) + 1 } : prev));
+      setActiveVideoTrack((prev) => (prev && prev.song_id === feedbackSong.song_id ? { ...prev, feedback_count: (prev.feedback_count || 0) + 1 } : prev));
+      loadSongs();
+    } catch (err) {
+      setFeedbackError(true);
+      setFeedbackMessage(err.message || "Could not submit review.");
+    } finally {
+      setSubmittingFeedback(false);
+    }
+  };
+
+  const handleDeleteFeedback = async (feedbackId) => {
+    if (!window.confirm("Are you sure you want to permanently delete this feedback?")) return;
+    try {
+      const res = await fetch(`${API_BASE}/feedback/${feedbackId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to delete feedback.");
+      setSongFeedbackList((prev) => prev.filter((f) => f.feedback_id !== feedbackId));
+      setFeedbackList((prev) => prev.filter((f) => f.feedback_id !== feedbackId));
+      if (feedbackSong) {
+        setActiveAudioTrack((prev) => (prev && prev.song_id === feedbackSong.song_id ? { ...prev, feedback_count: Math.max(0, (prev.feedback_count || 1) - 1) } : prev));
+        setActiveVideoTrack((prev) => (prev && prev.song_id === feedbackSong.song_id ? { ...prev, feedback_count: Math.max(0, (prev.feedback_count || 1) - 1) } : prev));
+      }
+      loadSongs();
+    } catch (err) {
+      alert(err.message);
     }
   };
 
@@ -313,17 +422,31 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
+    setActiveAudioTrack(null);
+    setActiveVideoTrack(null);
+    setIsPlaying(false);
+    setIsPlayerExpanded(false);
     setUser(null);
     localStorage.removeItem("songportal_user");
-    if (activeTab === "admin" || activeTab === "favorites") {
+    if (activeTab === "admin" || activeTab === "favorites" || activeTab === "premium") {
       setActiveTab("all");
     }
     setSuccessMessage("Logged out successfully.");
     setTimeout(() => setSuccessMessage(""), 3000);
   };
 
-  // Play audio or video
+  // Play audio or video (Restricted to Registered/Logged-in Users)
   const playMedia = (item) => {
+    if (!user) {
+      setErrorMessage("🔒 Access Restricted: Please Sign In or Create an Account to play audio and video songs!");
+      setTimeout(() => setErrorMessage(""), 4500);
+      openAuthModal("login");
+      return;
+    }
+
     const isFav = isSongFavorite(item.song_id, item.is_favorite);
     const resolvedItem = { ...item, is_favorite: isFav };
 
@@ -611,12 +734,48 @@ export default function App() {
     }
   };
 
+  // Admin Cancel User Subscription handler (Convert VIP user back to normal free user without deleting user)
+  const handleCancelSubscription = async (userId, username) => {
+    if (!window.confirm(`Are you sure you want to cancel the VIP subscription for "${username}" (ID: #${userId})?\n\nThis will convert them back to a Normal / Free user without deleting their account from the database.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/users/${userId}/subscription`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_vip: 0 })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to cancel subscription.");
+
+      setSuccessMessage(data.message || `Subscription cancelled for ${username}. Converted to normal user.`);
+      setTimeout(() => setSuccessMessage(""), 4000);
+
+      // Update local usersList state
+      setUsersList((prev) =>
+        prev.map((u) => (u.user_id === userId ? { ...u, is_vip: 0 } : u))
+      );
+
+      // If current session is that user, update local session
+      if (user && user.user_id === userId) {
+        const updated = { ...user, is_vip: 0 };
+        delete updated.vip_plan;
+        setUser(updated);
+        localStorage.setItem("songportal_user", JSON.stringify(updated));
+      }
+
+      loadPayments();
+    } catch (err) {
+      alert(err.message || "Failed to cancel subscription.");
+    }
+  };
+
   return (
     <div className="app-root">
       {/* NAVBAR */}
       <header className="navbar">
         <div className="nav-brand" onClick={() => setActiveTab("all")}>
-          🎵 <span>SongsPortal</span>
+          🎵 <span>Songs Portal System</span>
         </div>
 
         <nav className="nav-menu">
@@ -638,18 +797,14 @@ export default function App() {
           >
             🎬 Video Songs
           </button>
-          <button
-            className={`nav-btn ${activeTab === "premium" ? "active" : ""}`}
-            onClick={() => setActiveTab("premium")}
-          >
-            💎 Premium
-          </button>
-          <button
-            className={`nav-btn ${activeTab === "feedback" ? "active" : ""}`}
-            onClick={() => setActiveTab("feedback")}
-          >
-            💬 Feedback
-          </button>
+          {user && (
+            <button
+              className={`nav-btn ${activeTab === "premium" ? "active" : ""}`}
+              onClick={() => setActiveTab("premium")}
+            >
+              💎 Subscription
+            </button>
+          )}
           {user && (
             <button
               className={`nav-btn ${activeTab === "favorites" ? "active" : ""}`}
@@ -670,8 +825,13 @@ export default function App() {
 
         <div className="nav-auth">
           {user ? (
-            <div className="user-tag">
-              <span>👤 {user.username}</span>
+            <div className={`user-tag ${isVipUser ? "vip-user-tag" : ""}`}>
+              <span>{isVipUser ? "👑" : "👤"} {user.username}</span>
+              {isVipUser && (
+                <span className="vip-badge-pill" title="Active VIP Member">
+                  👑 VIP Member
+                </span>
+              )}
               <span className={`role-pill ${user.role}`}>{user.role}</span>
               <button className="btn-secondary" style={{ padding: "4px 10px", fontSize: "12px" }} onClick={handleLogout}>
                 Logout
@@ -950,6 +1110,7 @@ export default function App() {
                     <th>Username</th>
                     <th>Email</th>
                     <th>Role</th>
+                    <th>Subscription Status</th>
                     <th>Registered At</th>
                     <th>Actions</th>
                   </tr>
@@ -958,12 +1119,30 @@ export default function App() {
                   {usersList.map((u) => (
                     <tr key={u.user_id}>
                       <td>#{u.user_id}</td>
-                      <td><strong>{u.username}</strong></td>
+                      <td>
+                        <strong>{u.username}</strong>
+                        {Boolean(u.is_vip) && <span style={{ marginLeft: "4px" }} title="VIP Member">👑</span>}
+                      </td>
                       <td>{u.email}</td>
                       <td>
                         <span className={`role-pill ${u.role}`}>
                           {u.role}
                         </span>
+                      </td>
+                      <td>
+                        {u.role === "admin" ? (
+                          <span className="small-tag" style={{ background: "rgba(99, 102, 241, 0.15)", color: "#818cf8" }}>
+                            🛡️ Super Admin
+                          </span>
+                        ) : Boolean(u.is_vip) ? (
+                          <span className="vip-badge-pill" style={{ fontSize: "10px", padding: "2px 8px" }}>
+                            👑 Active VIP
+                          </span>
+                        ) : (
+                          <span className="small-tag" style={{ color: "var(--text-muted)" }}>
+                            Free / Normal User
+                          </span>
+                        )}
                       </td>
                       <td style={{ color: "var(--text-muted)", fontSize: "12px" }}>
                         {u.created_at ? new Date(u.created_at).toLocaleString() : "N/A"}
@@ -974,14 +1153,33 @@ export default function App() {
                             🛡️ System Admin
                           </span>
                         ) : (
-                          <button
-                            className="btn-danger"
-                            style={{ padding: "4px 10px", fontSize: "12px" }}
-                            onClick={() => handleDeleteUser(u.user_id, u.username)}
-                            title={`Delete user ${u.username}`}
-                          >
-                            🗑️ Delete User
-                          </button>
+                          <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                            {Boolean(u.is_vip) && (
+                              <button
+                                className="btn-secondary"
+                                style={{
+                                  padding: "4px 8px",
+                                  fontSize: "11px",
+                                  borderColor: "#f59e0b",
+                                  color: "#fbbf24",
+                                  fontWeight: "600",
+                                  whiteSpace: "nowrap"
+                                }}
+                                onClick={() => handleCancelSubscription(u.user_id, u.username)}
+                                title={`Cancel VIP subscription for ${u.username} and convert back to normal free user`}
+                              >
+                                🚫 Cancel Subscription
+                              </button>
+                            )}
+                            <button
+                              className="btn-danger"
+                              style={{ padding: "4px 8px", fontSize: "11px", whiteSpace: "nowrap" }}
+                              onClick={() => handleDeleteUser(u.user_id, u.username)}
+                              title={`Delete user account ${u.username}`}
+                            >
+                              🗑️ Delete User
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -1006,23 +1204,41 @@ export default function App() {
                   <thead>
                     <tr>
                       <th>ID</th>
+                      <th>Track / Song</th>
                       <th>User</th>
                       <th>Category</th>
                       <th>Rating</th>
                       <th>Comment</th>
                       <th>Submitted At</th>
+                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {feedbackList.map((f) => (
                       <tr key={f.feedback_id}>
                         <td>#{f.feedback_id}</td>
+                        <td>
+                          <strong>{f.song_name || "General / App"}</strong>
+                          {f.singer_name && (
+                            <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{f.singer_name}</div>
+                          )}
+                        </td>
                         <td><strong>{f.username || "Anonymous"}</strong></td>
                         <td><span className="small-tag">{f.category}</span></td>
                         <td style={{ color: "#f59e0b" }}>{"⭐".repeat(f.rating || 5)}</td>
-                        <td style={{ maxWidth: "350px", wordBreak: "break-word" }}>{f.comment}</td>
+                        <td style={{ maxWidth: "280px", wordBreak: "break-word" }}>{f.comment}</td>
                         <td style={{ color: "var(--text-muted)", fontSize: "12px" }}>
                           {f.created_at ? new Date(f.created_at).toLocaleString() : "N/A"}
+                        </td>
+                        <td>
+                          <button
+                            className="btn-danger"
+                            style={{ padding: "4px 8px", fontSize: "11px" }}
+                            onClick={() => handleDeleteFeedback(f.feedback_id)}
+                            title="Delete this feedback permanently"
+                          >
+                            🗑️ Delete
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -1052,6 +1268,7 @@ export default function App() {
                       <th>Amount</th>
                       <th>Status</th>
                       <th>Date</th>
+                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1062,12 +1279,32 @@ export default function App() {
                         <td><span className="small-tag">{p.plan_name}</span></td>
                         <td style={{ color: "#10b981", fontWeight: "700" }}>₹{p.amount} {p.currency}</td>
                         <td>
-                          <span style={{ background: "#065f46", color: "#a7f3d0", padding: "2px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: "700" }}>
-                            {p.status}
-                          </span>
+                          {p.status === "CANCELLED_BY_ADMIN" ? (
+                            <span style={{ background: "rgba(239, 68, 68, 0.15)", color: "#fca5a5", border: "1px solid #ef4444", padding: "2px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: "700" }}>
+                              CANCELLED
+                            </span>
+                          ) : (
+                            <span style={{ background: "#065f46", color: "#a7f3d0", padding: "2px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: "700" }}>
+                              {p.status}
+                            </span>
+                          )}
                         </td>
                         <td style={{ color: "var(--text-muted)", fontSize: "12px" }}>
                           {p.created_at ? new Date(p.created_at).toLocaleString() : "N/A"}
+                        </td>
+                        <td>
+                          {p.status === "SUCCESS" ? (
+                            <button
+                              className="btn-secondary"
+                              style={{ padding: "3px 8px", fontSize: "11px", borderColor: "#f59e0b", color: "#fbbf24", fontWeight: "600", whiteSpace: "nowrap" }}
+                              onClick={() => handleCancelSubscription(p.user_id, p.username)}
+                              title={`Cancel VIP plan for ${p.username}`}
+                            >
+                              🚫 Cancel Plan
+                            </button>
+                          ) : (
+                            <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>Inactive</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1077,10 +1314,8 @@ export default function App() {
             )}
           </div>
         </div>
-      ) : activeTab === "feedback" ? (
-        <FeedbackPage user={user} API_BASE={API_BASE} />
-      ) : activeTab === "premium" ? (
-        <PaymentPage user={user} API_BASE={API_BASE} />
+      ) : activeTab === "premium" && user ? (
+        <PaymentPage user={user} API_BASE={API_BASE} onSubscriptionSuccess={handleSubscriptionSuccess} />
       ) : (
         /* MAIN LISTENER PORTAL VIEW */
         <main>
@@ -1206,13 +1441,23 @@ export default function App() {
                         {isSongFavorite(song.song_id, song.is_favorite) ? "❤️" : "🤍"}
                       </button>
 
-                      <a
-                        href={`${API_BASE}/songs/${song.song_id}/download`}
-                        className="download-link"
-                        download
-                        title="Download track"
+                      <button
+                        className="btn-secondary"
+                        style={{ padding: "4px 8px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                        onClick={() => openSongFeedback(song)}
+                        title="View and write feedback / reviews"
                       >
-                        ⬇ Download
+                        💬 {song.feedback_count || 0}
+                      </button>
+
+                      <a
+                        href={isVipUser ? `${API_BASE}/songs/${song.song_id}/download` : "#"}
+                        className="download-link"
+                        onClick={(e) => handleDownloadClick(e, song)}
+                        download={isVipUser}
+                        title={isVipUser ? "Download track" : "🔒 VIP Exclusive: Upgrade to Download"}
+                      >
+                        {isVipUser ? "⬇ Download" : "🔒 Download"}
                       </a>
 
                       {user?.role === "admin" && (
@@ -1331,6 +1576,14 @@ export default function App() {
               ⤢
             </button>
             <button
+              className="control-btn"
+              onClick={() => openSongFeedback(activeAudioTrack)}
+              title={`Track Reviews (${activeAudioTrack.feedback_count || 0})`}
+              style={{ fontSize: "14px", marginRight: "4px" }}
+            >
+              💬
+            </button>
+            <button
               className={`fav-btn ${isSongFavorite(activeAudioTrack.song_id, activeAudioTrack.is_favorite) ? "active" : ""}`}
               onClick={() => toggleFavorite(activeAudioTrack.song_id)}
               title={isSongFavorite(activeAudioTrack.song_id, activeAudioTrack.is_favorite) ? "Remove from Favorites" : "Add to Favorites"}
@@ -1338,11 +1591,13 @@ export default function App() {
               {isSongFavorite(activeAudioTrack.song_id, activeAudioTrack.is_favorite) ? "❤️" : "🤍"}
             </button>
             <a
-              href={`${API_BASE}/songs/${activeAudioTrack.song_id}/download`}
+              href={isVipUser ? `${API_BASE}/songs/${activeAudioTrack.song_id}/download` : "#"}
               className="download-link"
-              download
+              onClick={(e) => handleDownloadClick(e, activeAudioTrack)}
+              download={isVipUser}
+              title={isVipUser ? "Download MP3" : "🔒 VIP Exclusive: Upgrade to Download"}
             >
-              ⬇
+              {isVipUser ? "⬇" : "🔒"}
             </a>
             <button
               className="control-btn"
@@ -1518,13 +1773,23 @@ export default function App() {
                   >
                     {isSongFavorite(activeAudioTrack.song_id, activeAudioTrack.is_favorite) ? "❤️ Liked" : "🤍 Favorite"}
                   </button>
+                  <button
+                    className="btn-secondary"
+                    style={{ fontSize: "12px", padding: "6px 12px", display: "inline-flex", alignItems: "center", gap: "6px" }}
+                    onClick={() => openSongFeedback(activeAudioTrack)}
+                    title="Track Reviews & Feedback"
+                  >
+                    💬 Reviews ({activeAudioTrack.feedback_count || 0})
+                  </button>
                   <a
-                    href={`${API_BASE}/songs/${activeAudioTrack.song_id}/download`}
+                    href={isVipUser ? `${API_BASE}/songs/${activeAudioTrack.song_id}/download` : "#"}
                     className="btn-secondary"
                     style={{ textDecoration: "none", fontSize: "12px", padding: "6px 12px", display: "inline-flex", alignItems: "center", gap: "4px" }}
-                    download
+                    onClick={(e) => handleDownloadClick(e, activeAudioTrack)}
+                    download={isVipUser}
+                    title={isVipUser ? "Download MP3" : "🔒 VIP Exclusive: Upgrade to Download"}
                   >
-                    ⬇ Download MP3
+                    {isVipUser ? "⬇ Download MP3" : "🔒 Download MP3 (VIP)"}
                   </a>
                 </div>
               </div>
@@ -1583,13 +1848,23 @@ export default function App() {
                 >
                   {isSongFavorite(activeVideoTrack.song_id, activeVideoTrack.is_favorite) ? "❤️ Liked" : "🤍 Like"}
                 </button>
-                <a
-                  href={`${API_BASE}/songs/${activeVideoTrack.song_id}/download`}
+                <button
                   className="btn-secondary"
-                  style={{ textDecoration: "none", fontSize: "13px", padding: "8px 14px" }}
-                  download
+                  style={{ fontSize: "13px", padding: "8px 14px", display: "inline-flex", alignItems: "center", gap: "6px" }}
+                  onClick={() => openSongFeedback(activeVideoTrack)}
+                  title="View and write reviews for this video"
                 >
-                  ⬇ Download Video
+                  💬 Reviews ({activeVideoTrack.feedback_count || 0})
+                </button>
+                <a
+                  href={isVipUser ? `${API_BASE}/songs/${activeVideoTrack.song_id}/download` : "#"}
+                  className="btn-secondary"
+                  style={{ textDecoration: "none", fontSize: "13px", padding: "8px 14px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                  onClick={(e) => handleDownloadClick(e, activeVideoTrack)}
+                  download={isVipUser}
+                  title={isVipUser ? "Download Video" : "🔒 VIP Exclusive: Upgrade to Download"}
+                >
+                  {isVipUser ? "⬇ Download Video" : "🔒 Download Video (VIP)"}
                 </a>
               </div>
             </div>
@@ -1841,7 +2116,7 @@ export default function App() {
                   />
                 </div>
                 <button type="submit" className="btn-primary" style={{ marginTop: "10px" }} disabled={loggingIn}>
-                  {loggingIn ? "Signing In..." : "Sign In to SongsPortal"}
+                  {loggingIn ? "Signing In..." : "Sign In to Songs Portal System"}
                 </button>
               </form>
             ) : !otpStep ? (
@@ -1956,137 +2231,321 @@ export default function App() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
 
-// ==========================================
-// FEEDBACK PAGE COMPONENT
-// ==========================================
-function FeedbackPage({ user, API_BASE }) {
-  const [rating, setRating] = useState("5");
-  const [category, setCategory] = useState("General Experience");
-  const [comment, setComment] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState("");
-  const [isError, setIsError] = useState(false);
-
-  const handleSubmitFeedback = async (e) => {
-    e.preventDefault();
-    setSubmitting(true);
-    setMessage("");
-    setIsError(false);
-
-    try {
-      const res = await fetch(`${API_BASE}/feedback`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: user ? user.user_id : null,
-          username: user ? user.username : "Anonymous Listener",
-          rating: Number(rating),
-          category,
-          comment
-        })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed to submit feedback.");
-
-      setMessage(data.message || "Thank you for your valuable feedback!");
-      setComment("");
-    } catch (err) {
-      setIsError(true);
-      setMessage(err.message || "Something went wrong.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div style={{ padding: "0 36px 40px", maxWidth: "800px", margin: "0 auto" }}>
-      <div className="hero" style={{ paddingLeft: 0, paddingRight: 0 }}>
-        <h1>Listener Feedback & Suggestions 💬</h1>
-        <p>Help us improve your music & video streaming experience. We read every response!</p>
-      </div>
-
-      <div className="admin-card">
-        {message && (
-          <div style={{ padding: "12px 18px", borderRadius: "8px", marginBottom: "20px", background: isError ? "#991b1b" : "#065f46", color: isError ? "#fecaca" : "#a7f3d0", fontWeight: "600", fontSize: "14px" }}>
-            {isError ? "⚠️ " : "✓ "} {message}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmitFeedback}>
-          <div className="admin-form-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", marginBottom: "16px" }}>
-            <div className="form-group">
-              <label>Feedback Category</label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-              >
-                <option value="General Experience">General Experience</option>
-                <option value="Audio Player">Audio Player & Quality</option>
-                <option value="Video Streaming">Video Streaming</option>
-                <option value="UI & Design">UI & Design</option>
-                <option value="Bug Report">Bug / Technical Issue</option>
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label>Overall Rating</label>
-              <select
-                value={rating}
-                onChange={(e) => setRating(e.target.value)}
-              >
-                <option value="5">⭐⭐⭐⭐⭐ (5 - Excellent)</option>
-                <option value="4">⭐⭐⭐⭐ (4 - Very Good)</option>
-                <option value="3">⭐⭐⭐ (3 - Good)</option>
-                <option value="2">⭐⭐ (2 - Fair)</option>
-                <option value="1">⭐ (1 - Poor)</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="form-group" style={{ marginBottom: "20px" }}>
-            <label>Your Comments / Suggestions *</label>
-            <textarea
-              rows="5"
-              required
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              placeholder="Tell us what you love or what we can improve..."
-              style={{ background: "#0f172a", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px", color: "#fff", fontSize: "14px", outline: "none", resize: "vertical", fontFamily: "inherit" }}
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="btn-primary"
-            disabled={submitting}
-            style={{ width: "100%", padding: "12px", fontSize: "15px" }}
+      {/* SONG REVIEWS & FEEDBACK MODAL */}
+      {feedbackSong && (
+        <div className="modal-overlay" onClick={() => setFeedbackSong(null)}>
+          <div
+            className="track-feedback-card"
+            onClick={(e) => e.stopPropagation()}
           >
-            {submitting ? "Submitting to Server..." : "🚀 Submit Feedback"}
-          </button>
-        </form>
-      </div>
+            <div className="modal-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", overflow: "hidden" }}>
+                {feedbackSong.cover_image_url ? (
+                  <img
+                    src={getImageUrl(feedbackSong.cover_image_url)}
+                    alt={feedbackSong.song_name}
+                    style={{ width: "42px", height: "42px", borderRadius: "6px", objectFit: "cover" }}
+                  />
+                ) : (
+                  <span style={{ fontSize: "28px" }}>{feedbackSong.media_type === "video" ? "🎬" : "🎵"}</span>
+                )}
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "16px", color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    💬 Reviews for "{feedbackSong.song_name}"
+                  </h3>
+                  <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                    Artist: <strong style={{ color: "#e2e8f0" }}>{feedbackSong.singer_name}</strong> • {feedbackSong.category} • {feedbackSong.media_type === "video" ? "Video Track" : "Audio Track"}
+                  </div>
+                </div>
+              </div>
+              <button className="close-btn" onClick={() => setFeedbackSong(null)} title="Close">
+                ✕
+              </button>
+            </div>
+
+            <div className="track-feedback-content">
+              {/* WRITE A REVIEW FORM */}
+              <div style={{ background: "rgba(30, 41, 59, 0.7)", border: "1px solid var(--border)", borderRadius: "10px", padding: "18px" }}>
+                <h4 style={{ margin: "0 0 12px", fontSize: "15px", color: "#818cf8", display: "flex", alignItems: "center", gap: "8px" }}>
+                  ✍️ Share Your Feedback & Review
+                </h4>
+
+                {feedbackMessage && (
+                  <div style={{
+                    padding: "10px 14px",
+                    borderRadius: "6px",
+                    marginBottom: "14px",
+                    background: feedbackError ? "rgba(239, 68, 68, 0.15)" : "rgba(16, 185, 129, 0.15)",
+                    border: `1px solid ${feedbackError ? "#ef4444" : "#10b981"}`,
+                    color: feedbackError ? "#fecaca" : "#a7f3d0",
+                    fontSize: "13px",
+                    fontWeight: "500"
+                  }}>
+                    {feedbackError ? "⚠️ " : "✓ "} {feedbackMessage}
+                  </div>
+                )}
+
+                {user ? (
+                  <form onSubmit={handleSubmitSongFeedback}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginBottom: "12px" }}>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label style={{ fontSize: "12px", marginBottom: "4px" }}>Rating</label>
+                        <select
+                          value={feedbackForm.rating}
+                          onChange={(e) => setFeedbackForm({ ...feedbackForm, rating: e.target.value })}
+                          style={{ padding: "8px", fontSize: "13px" }}
+                        >
+                          <option value="5">⭐⭐⭐⭐⭐ (5 - Masterpiece)</option>
+                          <option value="4">⭐⭐⭐⭐ (4 - Great)</option>
+                          <option value="3">⭐⭐⭐ (3 - Good)</option>
+                          <option value="2">⭐⭐ (2 - Average)</option>
+                          <option value="1">⭐ (1 - Poor)</option>
+                        </select>
+                      </div>
+
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label style={{ fontSize: "12px", marginBottom: "4px" }}>Review Category</label>
+                        <select
+                          value={feedbackForm.category}
+                          onChange={(e) => setFeedbackForm({ ...feedbackForm, category: e.target.value })}
+                          style={{ padding: "8px", fontSize: "13px" }}
+                        >
+                          <option value="General">General Review</option>
+                          <option value="Audio Quality">Audio / Sound Quality</option>
+                          <option value="Singing & Lyrics">Singing & Lyrics</option>
+                          <option value="Visuals & Video">Visuals & Direction</option>
+                          <option value="Music Composition">Music & Beats</option>
+                          <option value="Vibes & Mood">Vibes & Emotion</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="form-group" style={{ marginBottom: "12px" }}>
+                      <label style={{ fontSize: "12px", marginBottom: "4px" }}>Your Thoughts / Review *</label>
+                      <textarea
+                        rows="3"
+                        required
+                        value={feedbackForm.comment}
+                        onChange={(e) => setFeedbackForm({ ...feedbackForm, comment: e.target.value })}
+                        placeholder={`What do you think of "${feedbackSong.song_name}"? Give your honest opinion...`}
+                        style={{
+                          background: "#0f172a",
+                          border: "1px solid var(--border)",
+                          borderRadius: "6px",
+                          padding: "10px",
+                          color: "#fff",
+                          fontSize: "13px",
+                          outline: "none",
+                          width: "100%",
+                          resize: "vertical",
+                          fontFamily: "inherit"
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <button
+                        type="submit"
+                        className="btn-primary"
+                        disabled={submittingFeedback}
+                        style={{ padding: "8px 18px", fontSize: "13px" }}
+                      >
+                        {submittingFeedback ? "Submitting..." : "Post Review 🚀"}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div style={{ textAlign: "center", padding: "16px", background: "rgba(15, 23, 42, 0.5)", borderRadius: "8px" }}>
+                    <p style={{ margin: "0 0 10px", fontSize: "13px", color: "var(--text-muted)" }}>
+                      🔒 Want to share your review for this song?
+                    </p>
+                    <button
+                      className="btn-primary"
+                      style={{ padding: "6px 16px", fontSize: "12px" }}
+                      onClick={() => openAuthModal("login")}
+                    >
+                      Sign In to Write a Review
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* LIST OF REVIEWS FROM ALL USERS */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+                  <h4 style={{ margin: 0, fontSize: "15px", color: "#fff", display: "flex", alignItems: "center", gap: "8px" }}>
+                    🎧 Community Reviews ({songFeedbackList.length})
+                  </h4>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => loadSongFeedback(feedbackSong.song_id)}
+                    disabled={loadingSongFeedback}
+                    style={{ fontSize: "11px", padding: "4px 8px" }}
+                  >
+                    {loadingSongFeedback ? "Refreshing..." : "🔄 Refresh"}
+                  </button>
+                </div>
+
+                {loadingSongFeedback ? (
+                  <div style={{ textAlign: "center", padding: "24px", color: "var(--text-muted)", fontSize: "13px" }}>
+                    Loading reviews...
+                  </div>
+                ) : songFeedbackList.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "30px", background: "rgba(15, 23, 42, 0.4)", borderRadius: "8px", border: "1px dashed var(--border)" }}>
+                    <div style={{ fontSize: "28px", marginBottom: "6px" }}>💬</div>
+                    <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "13px" }}>
+                      No reviews yet for this track. Be the first listener to share your feedback!
+                    </p>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                    {songFeedbackList.map((rev) => {
+                      const isAuthorVip = Boolean(rev.is_vip || rev.user_role === "admin");
+                      return (
+                        <div key={rev.feedback_id} className={`review-item-card ${isAuthorVip ? "vip-review-card" : ""}`}>
+                          <div className="review-header">
+                            <div className="review-user-info">
+                              <span style={{ fontWeight: "700", color: isAuthorVip ? "#fbbf24" : "#38bdf8", fontSize: "13px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                                {isAuthorVip ? "👑" : "👤"} {rev.username || "Listener"}
+                              </span>
+                              {isAuthorVip && (
+                                <span className="vip-review-badge" title="Verified VIP Critic">
+                                  👑 Verified VIP Critic
+                                </span>
+                              )}
+                              <span className="small-tag">{rev.category}</span>
+                              <span style={{ color: "#f59e0b", fontSize: "13px" }}>
+                                {"⭐".repeat(rev.rating || 5)}
+                              </span>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                                {rev.created_at ? new Date(rev.created_at).toLocaleDateString() : ""}
+                              </span>
+                              {user?.role === "admin" && (
+                                <button
+                                  className="btn-danger"
+                                  style={{ padding: "2px 8px", fontSize: "11px" }}
+                                  onClick={() => handleDeleteFeedback(rev.feedback_id)}
+                                  title="Admin: Permanently delete this review"
+                                >
+                                  🗑️ Delete
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <p style={{ margin: 0, fontSize: "13px", color: "#e2e8f0", lineHeight: "1.5", wordBreak: "break-word" }}>
+                            {rev.comment}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIP UPGRADE MODAL */}
+      {vipModalOpen && (
+        <div className="modal-overlay" onClick={() => setVipModalOpen(false)}>
+          <div className="vip-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: "42px", marginBottom: "8px" }}>👑</div>
+            <h2 style={{ margin: "0 0 10px", fontSize: "22px", color: "#fbbf24" }}>
+              VIP Subscription Required
+            </h2>
+            <p style={{ color: "#cbd5e1", fontSize: "14px", lineHeight: "1.6", margin: "0 0 18px" }}>
+              Offline downloading of high-fidelity MP3 audio and HD video tracks is an exclusive <strong>VIP Member</strong> feature.
+            </p>
+
+            <div style={{ background: "rgba(15, 23, 42, 0.7)", border: "1px solid rgba(245, 158, 11, 0.35)", borderRadius: "8px", padding: "14px", marginBottom: "20px", textAlign: "left" }}>
+              <div style={{ color: "#fbbf24", fontWeight: "700", fontSize: "13px", marginBottom: "8px" }}>
+                💎 VIP Benefits Unlocked:
+              </div>
+              <ul style={{ margin: 0, paddingLeft: "18px", color: "#e2e8f0", fontSize: "12px", lineHeight: "1.8" }}>
+                <li>⚡ Unlimited 1-Click MP3 & Video Downloads</li>
+                <li>👑 Golden Crown Profile & "Verified VIP Critic" Badge</li>
+                <li>🎧 Ultra High Definition Lossless Sound</li>
+                <li>🚀 Priority Support & VIP Lounge Access</li>
+              </ul>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <button
+                className="btn-primary"
+                style={{
+                  background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                  color: "#1e1b4b",
+                  fontWeight: "800",
+                  fontSize: "14px",
+                  padding: "12px",
+                  boxShadow: "0 4px 14px rgba(245, 158, 11, 0.4)"
+                }}
+                onClick={() => {
+                  setVipModalOpen(false);
+                  if (!user) {
+                    openAuthModal("login");
+                  } else {
+                    setActiveTab("premium");
+                  }
+                }}
+              >
+                {user ? "Explore Subscription Plans (from ₹149) 💎" : "Sign In & Upgrade to VIP 👑"}
+              </button>
+              <button
+                className="btn-secondary"
+                style={{ padding: "8px", fontSize: "12px" }}
+                onClick={() => setVipModalOpen(false)}
+              >
+                Maybe Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ==========================================
-// PAYMENT PAGE COMPONENT
+// PAYMENT / SUBSCRIPTION PAGE COMPONENT
 // ==========================================
-function PaymentPage({ user, API_BASE }) {
-  const [selectedPlan, setSelectedPlan] = useState({ id: "monthly", name: "Premium Monthly Pass", price: 199, duration: "30 Days" });
+function PaymentPage({ user, API_BASE, onSubscriptionSuccess }) {
+  const [selectedPlan, setSelectedPlan] = useState({
+    id: "monthly",
+    name: "Monthly Premium",
+    price: 399,
+    duration: "30 Days Access"
+  });
   const [processing, setProcessing] = useState(false);
   const [paymentResult, setPaymentResult] = useState("");
   const [isError, setIsError] = useState(false);
 
   const plans = [
-    { id: "weekly", name: "Weekly Supporter", price: 69, duration: "7 Days Access", desc: "Ad-free streaming & downloads for 1 week." },
-    { id: "monthly", name: "Premium Monthly Pass", price: 199, duration: "30 Days Access", desc: "Full HD videos, lossless audio & priority queue." },
-    { id: "yearly", name: "VIP Annual Access", price: 1499, duration: "365 Days Access", desc: "Ultimate all-inclusive VIP badge & permanent perks." }
+    {
+      id: "weekly",
+      name: "Weekly Premium",
+      price: 149,
+      duration: "7 Days Access",
+      desc: "Ad-free streaming, unlimited skips & offline downloads for 7 days."
+    },
+    {
+      id: "monthly",
+      name: "Monthly Premium",
+      price: 399,
+      duration: "30 Days Access",
+      desc: "Full HD videos, lossless audio streaming & priority queue for 30 days."
+    },
+    {
+      id: "yearly",
+      name: "VIP Annual Premium",
+      price: 1499,
+      duration: "365 Days Access",
+      desc: "Ultimate all-inclusive VIP badge, permanent perks & highest bitrate for 1 year."
+    }
   ];
 
   const handleProcessPayment = async () => {
@@ -2121,7 +2580,10 @@ function PaymentPage({ user, API_BASE }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Payment transaction failed.");
 
-      setPaymentResult(`🎉 Payment Successful! Transaction ID: #${data.transaction_id || Math.floor(100000 + Math.random() * 900000)} (${selectedPlan.name} activated)`);
+      setPaymentResult(`🎉 Subscription Activated! Transaction ID: #${data.transaction_id || Math.floor(100000 + Math.random() * 900000)} (${selectedPlan.name})`);
+      if (onSubscriptionSuccess) {
+        onSubscriptionSuccess(selectedPlan.name);
+      }
     } catch (err) {
       setIsError(true);
       setPaymentResult(err.message || "Could not complete the payment transaction.");
@@ -2133,7 +2595,7 @@ function PaymentPage({ user, API_BASE }) {
   return (
     <div style={{ padding: "0 36px 40px", maxWidth: "900px", margin: "0 auto" }}>
       <div className="hero" style={{ paddingLeft: 0, paddingRight: 0 }}>
-        <h1>Upgrade to Premium 💎</h1>
+        <h1>Choose Your Subscription 💎</h1>
         <p>Unlock high-definition video streaming, offline background audio, and exclusive music catalogs.</p>
       </div>
 
@@ -2144,34 +2606,44 @@ function PaymentPage({ user, API_BASE }) {
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "20px", marginBottom: "30px" }}>
-        {plans.map((p) => (
-          <div
-            key={p.id}
-            onClick={() => setSelectedPlan(p)}
-            style={{
-              background: selectedPlan.id === p.id ? "rgba(99, 102, 241, 0.12)" : "var(--bg-card)",
-              border: selectedPlan.id === p.id ? "2px solid var(--primary)" : "1px solid var(--border)",
-              borderRadius: "var(--radius)",
-              padding: "24px",
-              cursor: "pointer",
-              transition: "all 0.2s ease",
-              display: "flex",
-              flexDirection: "column",
-              position: "relative"
-            }}
-          >
-            {selectedPlan.id === p.id && (
-              <span style={{ position: "absolute", top: "14px", right: "14px", background: "var(--primary)", color: "#fff", fontSize: "11px", fontWeight: "700", padding: "3px 8px", borderRadius: "4px" }}>
-                SELECTED
-              </span>
-            )}
-            <h3 style={{ margin: "0 0 8px", fontSize: "18px", color: "#fff" }}>{p.name}</h3>
-            <div style={{ fontSize: "28px", fontWeight: "800", color: "#818cf8", marginBottom: "12px" }}>
-              ₹{p.price} <span style={{ fontSize: "13px", fontWeight: "500", color: "var(--text-muted)" }}>/ {p.duration}</span>
+        {plans.map((p) => {
+          const isSelected = selectedPlan.id === p.id;
+          return (
+            <div
+              key={p.id}
+              onClick={() => setSelectedPlan(p)}
+              style={{
+                background: isSelected ? "rgba(99, 102, 241, 0.12)" : "var(--bg-card)",
+                border: isSelected ? "2px solid var(--primary)" : "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                padding: "24px",
+                cursor: "pointer",
+                transition: "all 0.2s ease",
+                display: "flex",
+                flexDirection: "column",
+                position: "relative"
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px", marginBottom: "10px" }}>
+                <h3 style={{ margin: 0, fontSize: "17px", color: "#fff", lineHeight: "1.3" }}>{p.name}</h3>
+                {isSelected ? (
+                  <span style={{ background: "var(--primary)", color: "#fff", fontSize: "11px", fontWeight: "700", padding: "3px 8px", borderRadius: "4px", whiteSpace: "nowrap", flexShrink: 0 }}>
+                    ✓ SELECTED
+                  </span>
+                ) : (
+                  <span style={{ border: "1px solid var(--border)", color: "var(--text-muted)", fontSize: "11px", padding: "3px 8px", borderRadius: "4px", whiteSpace: "nowrap", flexShrink: 0 }}>
+                    Select
+                  </span>
+                )}
+              </div>
+
+              <div style={{ fontSize: "28px", fontWeight: "800", color: "#818cf8", marginBottom: "12px" }}>
+                ₹{p.price} <span style={{ fontSize: "13px", fontWeight: "500", color: "var(--text-muted)" }}>/ {p.duration}</span>
+              </div>
+              <p style={{ color: "var(--text-muted)", fontSize: "13px", margin: "0 0 20px", flex: 1, lineHeight: "1.45" }}>{p.desc}</p>
             </div>
-            <p style={{ color: "var(--text-muted)", fontSize: "13px", margin: "0 0 20px", flex: 1 }}>{p.desc}</p>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="admin-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "16px" }}>
@@ -2185,7 +2657,7 @@ function PaymentPage({ user, API_BASE }) {
           className="btn-primary"
           style={{ padding: "12px 28px", fontSize: "15px", background: "#10b981" }}
         >
-          {processing ? "Processing Secure Payment..." : `Pay ₹${selectedPlan.price} Now`}
+          {processing ? "Processing Secure Payment..." : `Subscribe for ₹${selectedPlan.price} Now`}
         </button>
       </div>
     </div>
