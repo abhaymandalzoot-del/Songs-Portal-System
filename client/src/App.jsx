@@ -580,7 +580,7 @@ export default function App() {
       {/* NAVBAR */}
       <header className="navbar">
         <div className="nav-brand" onClick={() => setActiveTab("all")}>
-          🎵 <span>Songs Portal System</span>
+          🎵 <span>SongsPortal</span>
         </div>
 
         <nav className="nav-menu">
@@ -1105,6 +1105,18 @@ export default function App() {
           )}
         </main>
       )}
+
+      {/* GLOBAL FOOTER */}
+      <footer className="app-footer">
+        <div className="footer-content">
+          <p className="footer-copyright">
+            Copyright © {new Date().getFullYear()} <strong>Abhay Mandal</strong>. All Rights Reserved.
+          </p>
+          <p className="footer-subtext">
+            Songs Portal System • Built with ❤️ by Abhay Mandal
+          </p>
+        </div>
+      </footer>
 
       {/* FLOATING AUDIO PLAYER */}
       {activeAudioTrack && (
@@ -1691,7 +1703,7 @@ export default function App() {
                   />
                 </div>
                 <button type="submit" className="btn-primary" style={{ marginTop: "10px" }} disabled={loggingIn}>
-                  {loggingIn ? "Signing In..." : "Sign In to Songs Portal System"}
+                  {loggingIn ? "Signing In..." : "Sign In to SongsPortal"}
                 </button>
               </form>
             ) : !otpStep ? (
