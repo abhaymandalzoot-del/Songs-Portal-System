@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Production builds
+client/dist/
+
+# Secret Environment Files (Keeps your Gmail & DB passwords safe)
+.env
+server/.env
+*.env
+*.env.*
+!*.env.example
+
+# IDE & Editor files
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Logs & temp files
+*.log
+npm-debug.log*
+_legacy_archive/
